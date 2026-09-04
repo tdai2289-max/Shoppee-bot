@@ -1,6 +1,7 @@
 import os
 import re
 import uuid
+from urllib.parse import urlparse
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -11,14 +12,13 @@ from telegram.ext import (
     filters,
 )
 
-
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 
 
 # =========================
-# MENU
+# MENU CHÍNH
 # =========================
 
 main_keyboard = ReplyKeyboardMarkup(
@@ -44,40 +44,77 @@ def get_balance(user_id):
 
 
 # =========================
-# XỬ LÝ LINK
+# TÁCH LINK KHỎI TIN NHẮN
 # =========================
 
 def extract_url(text):
     match = re.search(r"https?://[^\s]+", text)
 
-    if match:
-        return match.group(0)
+    if not match:
+        return None
 
-    return None
+    url = match.group(0).strip()
 
+    # Xóa ký tự thường bị dính cuối link
+    url = url.rstrip(".,);]}>\"'")
 
-def detect_platform(url):
-    lower = url.lower()
-
-    if (
-        "shopee.vn" in lower
-        or "s.shopee.vn" in lower
-        or "shp.ee" in lower
-    ):
-        return "Shopee"
-
-    if (
-        "tiktok.com" in lower
-        or "vt.tiktok.com" in lower
-        or "vm.tiktok.com" in lower
-    ):
-        return "TikTok"
-
-    return None
+    return url
 
 
 # =========================
-# START
+# NHẬN DIỆN SHOPEE / TIKTOK
+# =========================
+
+def detect_platform(url):
+    try:
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+
+        # Bỏ port nếu có
+        host = host.split(":")[0]
+
+        # Bỏ www.
+        if host.startswith("www."):
+            host = host[4:]
+
+        # SHOPEE
+        # Nhận:
+        # shopee.vn
+        # s.shopee.vn
+        # any-subdomain.shopee.vn
+        # shp.ee
+        # vn.shp.ee
+        # any-subdomain.shp.ee
+        if (
+            host == "shopee.vn"
+            or host.endswith(".shopee.vn")
+            or host == "shp.ee"
+            or host.endswith(".shp.ee")
+        ):
+            return "Shopee"
+
+        # TIKTOK
+        # Nhận:
+        # tiktok.com
+        # www.tiktok.com
+        # vt.tiktok.com
+        # vm.tiktok.com
+        # m.tiktok.com
+        # bất kỳ subdomain *.tiktok.com
+        if (
+            host == "tiktok.com"
+            or host.endswith(".tiktok.com")
+        ):
+            return "TikTok"
+
+        return None
+
+    except Exception:
+        return None
+
+
+# =========================
+# /START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -87,8 +124,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Xin chào {name}!\n\n"
         "🎉 Chào mừng bạn đến với Shopee Tích Xu.\n\n"
-        "🛍 Hãy gửi link sản phẩm Shopee hoặc TikTok.\n"
-        "Bot sẽ tiếp nhận và xử lý link cho bạn.\n\n"
+        "🛍 Gửi link sản phẩm Shopee hoặc TikTok cho bot.\n"
+        "Hệ thống sẽ tiếp nhận và xử lý link cho bạn.\n\n"
         "👇 Chọn chức năng bên dưới:",
         reply_markup=main_keyboard,
     )
@@ -102,8 +139,6 @@ async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = update.effective_chat.id
 
-    name = user.full_name or "Chưa cập nhật"
-
     username = (
         f"@{user.username}"
         if user.username
@@ -115,7 +150,7 @@ async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👤 THÔNG TIN TÀI KHOẢN\n\n"
         f"🆔 ID hội viên: {user_id}\n"
-        f"👤 Họ tên: {name}\n"
+        f"👤 Họ tên: {user.full_name}\n"
         f"📱 Username: {username}\n"
         f"💰 Số dư: {balance:,}đ",
         reply_markup=main_keyboard,
@@ -132,7 +167,7 @@ async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         "💳 RÚT TIỀN\n\n"
-        f"💰 Số dư hiện tại: {balance:,}đ\n\n"
+        f"💰 Số dư khả dụng: {balance:,}đ\n\n"
         "⏳ Chức năng rút tiền đang được hoàn thiện.",
         reply_markup=main_keyboard,
     )
@@ -156,7 +191,7 @@ async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# LẤY CHAT ID
+# /ID
 # =========================
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,7 +201,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ADMIN GỬI LINK CHO KHÁCH
+# ADMIN /SEND
 # =========================
 
 async def admin_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -194,7 +229,7 @@ async def admin_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_chat_id = context.args[0]
     link = context.args[1]
 
-    if not link.startswith("http"):
+    if not link.startswith(("http://", "https://")):
         await update.message.reply_text(
             "❌ Link không hợp lệ."
         )
@@ -204,8 +239,8 @@ async def admin_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(
             chat_id=int(target_chat_id),
             text=(
-                "🎉 Link mua hàng của bạn đã sẵn sàng!\n\n"
-                f"🛍 Link:\n{link}\n\n"
+                "🎉 LINK MUA HÀNG ĐÃ SẴN SÀNG!\n\n"
+                f"🛍 Link của bạn:\n{link}\n\n"
                 "❤️ Cảm ơn bạn đã sử dụng bot."
             ),
             reply_markup=main_keyboard,
@@ -229,7 +264,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
 
-    # MENU
+    # ===== MENU =====
 
     if text == "👤 Thông tin tài khoản":
         await account_info(update, context)
@@ -257,13 +292,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # NHẬN LINK
+    # ===== NHẬN LINK =====
 
     url = extract_url(text)
 
     if not url:
         await update.message.reply_text(
-            "❌ Mình chưa thấy link.\n\n"
+            "❌ Mình chưa thấy đường link.\n\n"
             "Hãy gửi link Shopee hoặc TikTok.",
             reply_markup=main_keyboard,
         )
@@ -274,7 +309,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not platform:
         await update.message.reply_text(
             "❌ Link này chưa được hỗ trợ.\n\n"
-            "Hiện bot hỗ trợ Shopee và TikTok.",
+            "Hiện bot chỉ hỗ trợ link Shopee và TikTok.",
             reply_markup=main_keyboard,
         )
         return
@@ -290,15 +325,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else "Không có username"
     )
 
+    # Trả lời khách
     await update.message.reply_text(
         f"✅ Đã nhận link {platform}!\n\n"
         f"🆔 Mã yêu cầu: {request_id}\n"
-        "⏳ Đang xử lý link cho bạn.",
+        "⏳ Đang xử lý link cho bạn.\n\n"
+        "Bot sẽ gửi lại link mua hàng sau khi hoàn tất.",
         reply_markup=main_keyboard,
     )
 
-    # GỬI THÔNG BÁO CHO ADMIN
-
+    # Gửi yêu cầu cho admin
     if ADMIN_CHAT_ID:
         try:
             await context.bot.send_message(
@@ -306,12 +342,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=(
                     "🔔 YÊU CẦU MỚI\n\n"
                     f"🏪 Nền tảng: {platform}\n"
-                    f"🆔 Mã: {request_id}\n"
+                    f"🆔 Mã yêu cầu: {request_id}\n"
                     f"👤 User: {username}\n"
                     f"💬 Chat ID: {user_id}\n\n"
                     "🔗 Link khách gửi:\n"
                     f"{url}\n\n"
-                    "📤 Trả link cho khách bằng:\n\n"
+                    "📤 Sau khi tạo link affiliate, gửi:\n\n"
                     f"/send {user_id} LINK_AFFILIATE"
                 ),
             )
