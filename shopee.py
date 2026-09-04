@@ -1,47 +1,55 @@
 import os
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
+    CommandHandler,
     ContextTypes,
     MessageHandler,
-    CommandHandler,
     filters,
 )
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-PORT = int(os.getenv("PORT", "10000"))
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write("Shopee bot is running".encode())
-
-    def log_message(self, format, *args):
-        pass
-
-
-def run_web_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
-    print(f"Web server running on port {PORT}")
-    server.serve_forever()
+keyboard = ReplyKeyboardMarkup(
+    [
+        ["🚀 Bắt đầu"],
+        ["🛒 Gửi link Shopee", "🎵 Gửi link TikTok"],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Xin chào 👋\n"
-        "Hãy gửi link sản phẩm Shopee cho tôi."
+        "👋 Xin chào!\n\n"
+        "Hãy gửi link sản phẩm Shopee hoặc TikTok cho tôi.",
+        reply_markup=keyboard,
     )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     lower_text = text.lower()
+
+    if text == "🚀 Bắt đầu":
+        await start(update, context)
+        return
+
+    if text == "🛒 Gửi link Shopee":
+        await update.message.reply_text(
+            "📎 Hãy dán link sản phẩm Shopee vào đây.",
+            reply_markup=keyboard,
+        )
+        return
+
+    if text == "🎵 Gửi link TikTok":
+        await update.message.reply_text(
+            "📎 Hãy dán link sản phẩm TikTok Shop vào đây.",
+            reply_markup=keyboard,
+        )
+        return
 
     if (
         "shopee.vn" in lower_text
@@ -50,36 +58,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ):
         await update.message.reply_text(
             "✅ Đã nhận link Shopee của bạn!\n\n"
-            f"{text}"
+            "⏳ Hiện bot chưa tự tạo affiliate link. "
+            "Phần này mình sẽ thêm sau.",
+            reply_markup=keyboard,
         )
-    else:
+        return
+
+    if "tiktok.com" in lower_text:
         await update.message.reply_text(
-            "❌ Hãy gửi một đường link Shopee hợp lệ nhé!"
+            "✅ Đã nhận link TikTok của bạn!\n\n"
+            "⏳ Hiện bot chưa tự tạo affiliate link. "
+            "Phần này mình sẽ thêm sau.",
+            reply_markup=keyboard,
         )
+        return
+
+    await update.message.reply_text(
+        "❌ Mình chưa nhận ra link.\n\n"
+        "Hãy gửi link Shopee hoặc TikTok nhé.",
+        reply_markup=keyboard,
+    )
 
 
 def main():
     if not TOKEN:
-        print("Chưa cấu hình TELEGRAM_BOT_TOKEN")
-        return
+        raise RuntimeError("Chưa cấu hình TELEGRAM_BOT_TOKEN")
 
-    threading.Thread(
-        target=run_web_server,
-        daemon=True
-    ).start()
+    if not RENDER_URL:
+        raise RuntimeError("Không tìm thấy RENDER_EXTERNAL_URL")
 
-    app = ApplicationBuilder().token(TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            handle_message
+            handle_message,
         )
     )
 
-    print("Bot đang chạy...")
-    app.run_polling(drop_pending_updates=True)
+    webhook_url = f"{RENDER_URL}/telegram"
+
+    print(f"Webhook URL: {webhook_url}")
+
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=int(os.getenv("PORT", "10000")),
+        url_path="telegram",
+        webhook_url=webhook_url,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
