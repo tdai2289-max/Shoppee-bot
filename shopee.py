@@ -11,31 +11,52 @@ from telegram.ext import (
     filters,
 )
 
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL")
 
-keyboard = ReplyKeyboardMarkup(
+
+# =========================
+# MENU
+# =========================
+
+main_keyboard = ReplyKeyboardMarkup(
     [
-        ["🚀 Bắt đầu"],
+        ["👤 Thông tin tài khoản"],
         ["🛒 Gửi link Shopee", "🎵 Gửi link TikTok"],
+        ["💳 Rút tiền", "💰 Thu nhập"],
     ],
     resize_keyboard=True,
     is_persistent=True,
 )
 
-# Lưu tạm yêu cầu trong lúc bot đang chạy
-pending_requests = {}
+
+# =========================
+# DỮ LIỆU TẠM
+# =========================
+
+user_balances = {}
 
 
-def extract_url(text: str):
+def get_balance(user_id):
+    return user_balances.get(user_id, 0)
+
+
+# =========================
+# XỬ LÝ LINK
+# =========================
+
+def extract_url(text):
     match = re.search(r"https?://[^\s]+", text)
+
     if match:
         return match.group(0)
+
     return None
 
 
-def detect_platform(url: str):
+def detect_platform(url):
     lower = url.lower()
 
     if (
@@ -55,49 +76,196 @@ def detect_platform(url: str):
     return None
 
 
+# =========================
+# START
+# =========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    name = user.first_name or "bạn"
+
     await update.message.reply_text(
-        "👋 Xin chào!\n\n"
-        "🛍 Gửi link sản phẩm Shopee hoặc TikTok cho tôi.\n\n"
-        "Sau khi nhận link, hệ thống sẽ xử lý và gửi link mua hàng lại cho bạn.",
-        reply_markup=keyboard,
+        f"👋 Xin chào {name}!\n\n"
+        "🎉 Chào mừng bạn đến với Shopee Tích Xu.\n\n"
+        "🛍 Hãy gửi link sản phẩm Shopee hoặc TikTok.\n"
+        "Bot sẽ tiếp nhận và xử lý link cho bạn.\n\n"
+        "👇 Chọn chức năng bên dưới:",
+        reply_markup=main_keyboard,
     )
 
+
+# =========================
+# THÔNG TIN TÀI KHOẢN
+# =========================
+
+async def account_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = update.effective_chat.id
+
+    name = user.full_name or "Chưa cập nhật"
+
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "Chưa có"
+    )
+
+    balance = get_balance(user_id)
+
+    await update.message.reply_text(
+        "👤 THÔNG TIN TÀI KHOẢN\n\n"
+        f"🆔 ID hội viên: {user_id}\n"
+        f"👤 Họ tên: {name}\n"
+        f"📱 Username: {username}\n"
+        f"💰 Số dư: {balance:,}đ",
+        reply_markup=main_keyboard,
+    )
+
+
+# =========================
+# RÚT TIỀN
+# =========================
+
+async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    balance = get_balance(user_id)
+
+    await update.message.reply_text(
+        "💳 RÚT TIỀN\n\n"
+        f"💰 Số dư hiện tại: {balance:,}đ\n\n"
+        "⏳ Chức năng rút tiền đang được hoàn thiện.",
+        reply_markup=main_keyboard,
+    )
+
+
+# =========================
+# THU NHẬP
+# =========================
+
+async def income(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_chat.id
+    balance = get_balance(user_id)
+
+    await update.message.reply_text(
+        "💰 THU NHẬP\n\n"
+        f"💵 Số dư hiện tại: {balance:,}đ\n"
+        "📦 Hoa hồng chờ duyệt: 0đ\n"
+        "✅ Hoa hồng đã duyệt: 0đ",
+        reply_markup=main_keyboard,
+    )
+
+
+# =========================
+# LẤY CHAT ID
+# =========================
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"🆔 Telegram Chat ID của bạn:\n{update.effective_chat.id}"
+        f"🆔 Chat ID của bạn:\n{update.effective_chat.id}"
     )
 
 
+# =========================
+# ADMIN GỬI LINK CHO KHÁCH
+# =========================
+
+async def admin_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not ADMIN_CHAT_ID:
+        await update.message.reply_text(
+            "❌ Chưa cấu hình ADMIN_CHAT_ID."
+        )
+        return
+
+    if str(update.effective_chat.id) != str(ADMIN_CHAT_ID):
+        await update.message.reply_text(
+            "⛔ Bạn không có quyền dùng lệnh này."
+        )
+        return
+
+    if len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ Sai cú pháp.\n\n"
+            "Dùng:\n"
+            "/send CHAT_ID LINK"
+        )
+        return
+
+    target_chat_id = context.args[0]
+    link = context.args[1]
+
+    if not link.startswith("http"):
+        await update.message.reply_text(
+            "❌ Link không hợp lệ."
+        )
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=int(target_chat_id),
+            text=(
+                "🎉 Link mua hàng của bạn đã sẵn sàng!\n\n"
+                f"🛍 Link:\n{link}\n\n"
+                "❤️ Cảm ơn bạn đã sử dụng bot."
+            ),
+            reply_markup=main_keyboard,
+        )
+
+        await update.message.reply_text(
+            "✅ Đã gửi link cho khách."
+        )
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Không gửi được:\n{e}"
+        )
+
+
+# =========================
+# XỬ LÝ TIN NHẮN
+# =========================
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     text = update.message.text.strip()
 
-    if text == "🚀 Bắt đầu":
-        await start(update, context)
+    # MENU
+
+    if text == "👤 Thông tin tài khoản":
+        await account_info(update, context)
+        return
+
+    if text == "💳 Rút tiền":
+        await withdraw(update, context)
+        return
+
+    if text == "💰 Thu nhập":
+        await income(update, context)
         return
 
     if text == "🛒 Gửi link Shopee":
         await update.message.reply_text(
             "🛒 Hãy dán link sản phẩm Shopee vào đây.",
-            reply_markup=keyboard,
+            reply_markup=main_keyboard,
         )
         return
 
     if text == "🎵 Gửi link TikTok":
         await update.message.reply_text(
-            "🎵 Hãy dán link sản phẩm TikTok Shop vào đây.",
-            reply_markup=keyboard,
+            "🎵 Hãy dán link sản phẩm TikTok vào đây.",
+            reply_markup=main_keyboard,
         )
         return
+
+    # NHẬN LINK
 
     url = extract_url(text)
 
     if not url:
         await update.message.reply_text(
-            "❌ Mình chưa thấy đường link.\n\n"
-            "Hãy gửi link Shopee hoặc TikTok nhé.",
-            reply_markup=keyboard,
+            "❌ Mình chưa thấy link.\n\n"
+            "Hãy gửi link Shopee hoặc TikTok.",
+            reply_markup=main_keyboard,
         )
         return
 
@@ -106,8 +274,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not platform:
         await update.message.reply_text(
             "❌ Link này chưa được hỗ trợ.\n\n"
-            "Hiện bot nhận link Shopee và TikTok.",
-            reply_markup=keyboard,
+            "Hiện bot hỗ trợ Shopee và TikTok.",
+            reply_markup=main_keyboard,
         )
         return
 
@@ -115,100 +283,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     user_id = update.effective_chat.id
-    username = f"@{user.username}" if user.username else "Không có username"
 
-    pending_requests[request_id] = {
-        "user_id": user_id,
-        "platform": platform,
-        "original_url": url,
-    }
-
-    await update.message.reply_text(
-        f"✅ Đã nhận link {platform} của bạn!\n\n"
-        f"🆔 Mã yêu cầu: {request_id}\n"
-        "⏳ Đang chờ xử lý link mua hàng...",
-        reply_markup=keyboard,
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "Không có username"
     )
 
-    if not ADMIN_CHAT_ID:
-        print("Chưa cấu hình ADMIN_CHAT_ID")
-        return
+    await update.message.reply_text(
+        f"✅ Đã nhận link {platform}!\n\n"
+        f"🆔 Mã yêu cầu: {request_id}\n"
+        "⏳ Đang xử lý link cho bạn.",
+        reply_markup=main_keyboard,
+    )
 
-    try:
-        await context.bot.send_message(
-            chat_id=int(ADMIN_CHAT_ID),
-            text=(
-                "🔔 CÓ YÊU CẦU MỚI\n\n"
-                f"🏪 Nền tảng: {platform}\n"
-                f"🆔 Mã: {request_id}\n"
-                f"👤 User: {username}\n"
-                f"💬 Chat ID: {user_id}\n\n"
-                f"🔗 Link gốc:\n{url}\n\n"
-                "Sau khi tạo affiliate link, gửi:\n\n"
-                f"/reply {user_id} LINK_AFFILIATE"
-            ),
-        )
-    except Exception as e:
-        print(f"Lỗi gửi cho admin: {e}")
+    # GỬI THÔNG BÁO CHO ADMIN
+
+    if ADMIN_CHAT_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=int(ADMIN_CHAT_ID),
+                text=(
+                    "🔔 YÊU CẦU MỚI\n\n"
+                    f"🏪 Nền tảng: {platform}\n"
+                    f"🆔 Mã: {request_id}\n"
+                    f"👤 User: {username}\n"
+                    f"💬 Chat ID: {user_id}\n\n"
+                    "🔗 Link khách gửi:\n"
+                    f"{url}\n\n"
+                    "📤 Trả link cho khách bằng:\n\n"
+                    f"/send {user_id} LINK_AFFILIATE"
+                ),
+            )
+
+        except Exception as e:
+            print(f"Lỗi gửi admin: {e}")
 
 
-async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not ADMIN_CHAT_ID:
-        await update.message.reply_text("❌ Chưa cấu hình ADMIN_CHAT_ID.")
-        return
-
-    if str(update.effective_chat.id) != str(ADMIN_CHAT_ID):
-        await update.message.reply_text("⛔ Bạn không có quyền dùng lệnh này.")
-        return
-
-    if len(context.args) < 2:
-        await update.message.reply_text(
-            "Sai cú pháp.\n\n"
-            "Dùng:\n"
-            "/reply CHAT_ID LINK_AFFILIATE"
-        )
-        return
-
-    target_chat_id = context.args[0]
-    affiliate_link = context.args[1]
-
-    if not affiliate_link.startswith("http"):
-        await update.message.reply_text("❌ Affiliate link không hợp lệ.")
-        return
-
-    try:
-        await context.bot.send_message(
-            chat_id=int(target_chat_id),
-            text=(
-                "🎉 LINK CỦA BẠN ĐÃ SẴN SÀNG!\n\n"
-                f"🛍 Mua hàng tại đây:\n{affiliate_link}\n\n"
-                "❤️ Cảm ơn bạn đã sử dụng bot."
-            ),
-            reply_markup=keyboard,
-        )
-
-        await update.message.reply_text(
-            "✅ Đã gửi affiliate link cho khách."
-        )
-
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Gửi thất bại:\n{e}"
-        )
-
+# =========================
+# MAIN
+# =========================
 
 def main():
+
     if not TOKEN:
-        raise RuntimeError("Chưa cấu hình TELEGRAM_BOT_TOKEN")
+        raise RuntimeError(
+            "Chưa cấu hình TELEGRAM_BOT_TOKEN"
+        )
 
     if not RENDER_URL:
-        raise RuntimeError("Không tìm thấy RENDER_EXTERNAL_URL")
+        raise RuntimeError(
+            "Không tìm thấy RENDER_EXTERNAL_URL"
+        )
 
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("id", get_id))
-    app.add_handler(CommandHandler("reply", admin_reply))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("id", get_id)
+    )
+
+    app.add_handler(
+        CommandHandler("send", admin_send)
+    )
 
     app.add_handler(
         MessageHandler(
