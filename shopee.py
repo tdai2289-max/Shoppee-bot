@@ -2,11 +2,11 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timedelta
+
+from datetime import datetime, timedelta, time as dt_time
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import create_engine, text
 
 from telegram import (
@@ -43,6 +43,8 @@ DATABASE_URL = os.getenv(
     "sqlite:///bot.db"
 )
 
+TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
 
 # =========================================================
 # DATABASE URL
@@ -74,7 +76,6 @@ if DATABASE_URL.startswith("sqlite"):
             "check_same_thread": False
         },
     )
-
 else:
     engine = create_engine(
         DATABASE_URL,
@@ -84,15 +85,15 @@ else:
 
 # =========================================================
 # TẠO DATABASE
+# DÙNG V3 ĐỂ KHÔNG XUNG ĐỘT BẢNG CŨ
 # =========================================================
 
 def init_db():
 
     with engine.begin() as conn:
 
-        # USER
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS users (
+            CREATE TABLE IF NOT EXISTS users_v3 (
                 chat_id BIGINT PRIMARY KEY,
                 username TEXT,
                 full_name TEXT,
@@ -107,9 +108,8 @@ def init_db():
             )
         """))
 
-        # REQUEST
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS requests (
+            CREATE TABLE IF NOT EXISTS requests_v3 (
                 request_id TEXT PRIMARY KEY,
 
                 chat_id BIGINT NOT NULL,
@@ -128,18 +128,16 @@ def init_db():
             )
         """))
 
-        # ADMIN ĐANG TRẢ LINK CHO AI
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS admin_state (
+            CREATE TABLE IF NOT EXISTS admin_state_v3 (
                 admin_chat_id BIGINT PRIMARY KEY,
 
                 request_id TEXT
             )
         """))
 
-        # RÚT TIỀN
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS withdrawals (
+            CREATE TABLE IF NOT EXISTS withdrawals_v3 (
                 withdrawal_id TEXT PRIMARY KEY,
 
                 chat_id BIGINT NOT NULL,
@@ -154,9 +152,8 @@ def init_db():
             )
         """))
 
-        # STATE NHẬP RÚT TIỀN
         conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS withdraw_state (
+            CREATE TABLE IF NOT EXISTS withdraw_state_v3 (
                 chat_id BIGINT PRIMARY KEY,
 
                 stage TEXT NOT NULL,
@@ -172,9 +169,7 @@ def init_db():
 
 main_keyboard = ReplyKeyboardMarkup(
     [
-        [
-            "👤 Thông tin tài khoản"
-        ],
+        ["👤 Thông tin tài khoản"],
         [
             "🛒 Gửi link Shopee",
             "🎵 Gửi link TikTok",
@@ -184,30 +179,24 @@ main_keyboard = ReplyKeyboardMarkup(
             "💰 Thu nhập",
         ],
     ],
-
     resize_keyboard=True,
-
     is_persistent=True,
 )
 
 
 # =========================================================
-# SAVE USER
+# USER
 # =========================================================
 
 def save_user(user):
 
     now = int(time.time())
 
-    username = user.username or ""
-
-    full_name = user.full_name or ""
-
     with engine.begin() as conn:
 
         conn.execute(
             text("""
-                INSERT INTO users (
+                INSERT INTO users_v3 (
                     chat_id,
                     username,
                     full_name,
@@ -228,29 +217,18 @@ def save_user(user):
                 ON CONFLICT(chat_id)
 
                 DO UPDATE SET
-
-                    username =
-                        excluded.username,
-
-                    full_name =
-                        excluded.full_name
+                    username = excluded.username,
+                    full_name = excluded.full_name
             """),
 
             {
                 "chat_id": user.id,
-
-                "username": username,
-
-                "full_name": full_name,
-
+                "username": user.username or "",
+                "full_name": user.full_name or "",
                 "created_ts": now,
             },
         )
 
-
-# =========================================================
-# LẤY SỐ DƯ
-# =========================================================
 
 def get_balances(chat_id):
 
@@ -262,7 +240,7 @@ def get_balances(chat_id):
                     available_balance,
                     pending_balance
 
-                FROM users
+                FROM users_v3
 
                 WHERE chat_id = :chat_id
             """),
@@ -283,7 +261,7 @@ def get_balances(chat_id):
 
 
 # =========================================================
-# LẤY LINK
+# LINK
 # =========================================================
 
 def extract_url(message):
@@ -298,16 +276,10 @@ def extract_url(message):
 
     url = match.group(0).strip()
 
-    url = url.rstrip(
+    return url.rstrip(
         ".,);]}>\"'"
     )
 
-    return url
-
-
-# =========================================================
-# NHẬN DIỆN SHOPEE / TIKTOK
-# =========================================================
 
 def detect_platform(url):
 
@@ -322,32 +294,33 @@ def detect_platform(url):
         )
 
         if host.startswith("www."):
-
             host = host[4:]
 
         # SHOPEE
+        # Ví dụ:
+        # shopee.vn
+        # s.shopee.vn
+        # vn.shp.ee
+        # shp.ee
+
         if (
             host == "shopee.vn"
-
-            or host.endswith(
-                ".shopee.vn"
-            )
-
+            or host.endswith(".shopee.vn")
             or host == "shp.ee"
-
-            or host.endswith(
-                ".shp.ee"
-            )
+            or host.endswith(".shp.ee")
         ):
             return "Shopee"
 
         # TIKTOK
+        # Ví dụ:
+        # tiktok.com
+        # www.tiktok.com
+        # vt.tiktok.com
+        # vm.tiktok.com
+
         if (
             host == "tiktok.com"
-
-            or host.endswith(
-                ".tiktok.com"
-            )
+            or host.endswith(".tiktok.com")
         ):
             return "TikTok"
 
@@ -378,16 +351,28 @@ async def start(
 
     await update.message.reply_text(
         f"👋 Xin chào {name}!\n\n"
-
         "🎉 Chào mừng bạn đến với Shopee Tích Xu.\n\n"
-
         "🛍 Hãy gửi link sản phẩm Shopee hoặc TikTok.\n"
-
         "Hệ thống sẽ tiếp nhận và xử lý link cho bạn.\n\n"
-
         "👇 Chọn chức năng bên dưới:",
 
         reply_markup=main_keyboard,
+    )
+
+
+# =========================================================
+# /ID
+# =========================================================
+
+async def get_id(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    await update.message.reply_text(
+        "👤 Thông tin tài khoản của bạn\n\n"
+        f"🆔 ID hội viên: "
+        f"{update.effective_chat.id}"
     )
 
 
@@ -412,11 +397,11 @@ async def account_info(
 
     with engine.begin() as conn:
 
-        total_requests = conn.execute(
+        total = conn.execute(
             text("""
                 SELECT COUNT(*)
 
-                FROM requests
+                FROM requests_v3
 
                 WHERE chat_id = :chat_id
             """),
@@ -431,12 +416,13 @@ async def account_info(
             text("""
                 SELECT COUNT(*)
 
-                FROM requests
+                FROM requests_v3
 
                 WHERE
                     chat_id = :chat_id
 
-                AND status = 'done'
+                AND
+                    status = 'done'
             """),
 
             {
@@ -458,9 +444,11 @@ async def account_info(
 
         f"🆔 ID hội viên: {chat_id}\n"
 
-        f"👤 Họ tên: {user.full_name}\n"
+        f"👤 Họ tên: "
+        f"{user.full_name}\n"
 
-        f"📱 Username: {username}\n\n"
+        f"📱 Username: "
+        f"{username}\n\n"
 
         f"💰 Số dư có thể rút: "
         f"{available:,}đ\n"
@@ -469,12 +457,12 @@ async def account_info(
         f"{pending:,}đ\n\n"
 
         f"📦 Tổng yêu cầu: "
-        f"{total_requests}\n"
+        f"{total}\n"
 
         f"✅ Đã hoàn tất: "
         f"{completed}\n\n"
 
-        "📜 Xem lịch sử bằng /history",
+        "📜 Gõ /history để xem lịch sử.",
 
         reply_markup=main_keyboard,
     )
@@ -500,10 +488,10 @@ async def income(
     await update.message.reply_text(
         "💰 THU NHẬP\n\n"
 
-        f"💰 Có thể rút: "
+        f"💰 Số dư có thể rút: "
         f"{available:,}đ\n"
 
-        f"⏳ Chờ duyệt: "
+        f"⏳ Số dư chờ duyệt: "
         f"{pending:,}đ",
 
         reply_markup=main_keyboard,
@@ -511,7 +499,7 @@ async def income(
 
 
 # =========================================================
-# LỊCH SỬ KHÁCH
+# HISTORY
 # =========================================================
 
 async def history(
@@ -533,9 +521,10 @@ async def history(
                     status,
                     created_ts
 
-                FROM requests
+                FROM requests_v3
 
-                WHERE chat_id = :chat_id
+                WHERE
+                    chat_id = :chat_id
 
                 ORDER BY
                     created_ts DESC
@@ -569,10 +558,6 @@ async def history(
             "✅ Hoàn tất",
     }
 
-    tz = ZoneInfo(
-        "Asia/Ho_Chi_Minh"
-    )
-
     lines = [
         "📜 LỊCH SỬ YÊU CẦU\n"
     ]
@@ -580,18 +565,15 @@ async def history(
     for row in rows:
 
         request_id = row[0]
-
         platform = row[1]
-
         status = row[2]
-
         created_ts = row[3]
 
         created_time = (
             datetime
             .fromtimestamp(
                 created_ts,
-                tz
+                TZ
             )
             .strftime(
                 "%d/%m/%Y %H:%M"
@@ -600,12 +582,9 @@ async def history(
 
         lines.append(
             "\n"
-            f"🆔 {request_id}\n"
-
+            f"🆔 Mã: {request_id}\n"
             f"🏪 {platform}\n"
-
             f"📅 {created_time}\n"
-
             f"{status_names.get(status, status)}\n"
         )
 
@@ -631,14 +610,14 @@ def find_recent_duplicate(
 
     with engine.begin() as conn:
 
-        row = conn.execute(
+        return conn.execute(
             text("""
                 SELECT
                     request_id,
                     status,
                     affiliate_url
 
-                FROM requests
+                FROM requests_v3
 
                 WHERE
                     chat_id = :chat_id
@@ -657,16 +636,11 @@ def find_recent_duplicate(
 
             {
                 "chat_id": chat_id,
-
                 "url": url,
-
-                "limit_ts":
-                    five_minutes_ago,
+                "limit_ts": five_minutes_ago,
             },
 
         ).fetchone()
-
-    return row
 
 
 # =========================================================
@@ -682,7 +656,7 @@ async def withdraw(
         update.effective_chat.id
     )
 
-    available, pending = get_balances(
+    available, _ = get_balances(
         chat_id
     )
 
@@ -706,7 +680,7 @@ async def withdraw(
 
         conn.execute(
             text("""
-                INSERT INTO withdraw_state (
+                INSERT INTO withdraw_state_v3 (
                     chat_id,
                     stage,
                     amount
@@ -743,10 +717,6 @@ async def withdraw(
     )
 
 
-# =========================================================
-# WITHDRAW STATE
-# =========================================================
-
 def get_withdraw_state(chat_id):
 
     with engine.begin() as conn:
@@ -757,9 +727,10 @@ def get_withdraw_state(chat_id):
                     stage,
                     amount
 
-                FROM withdraw_state
+                FROM withdraw_state_v3
 
-                WHERE chat_id = :chat_id
+                WHERE
+                    chat_id = :chat_id
             """),
 
             {
@@ -775,9 +746,10 @@ def clear_withdraw_state(chat_id):
 
         conn.execute(
             text("""
-                DELETE FROM withdraw_state
+                DELETE FROM withdraw_state_v3
 
-                WHERE chat_id = :chat_id
+                WHERE
+                    chat_id = :chat_id
             """),
 
             {
@@ -787,7 +759,7 @@ def clear_withdraw_state(chat_id):
 
 
 # =========================================================
-# ADMIN CỘNG TIỀN CHỜ DUYỆT
+# ADMIN: CỘNG TIỀN CHỜ DUYỆT
 # =========================================================
 
 async def add_pending(
@@ -797,21 +769,20 @@ async def add_pending(
 
     if (
         not ADMIN_CHAT_ID
-
-        or str(
-            update.effective_chat.id
-        )
-        != str(
-            ADMIN_CHAT_ID
-        )
+        or str(update.effective_chat.id)
+        != str(ADMIN_CHAT_ID)
     ):
+
+        await update.message.reply_text(
+            "⛔ Bạn không có quyền."
+        )
+
         return
 
     if len(context.args) != 2:
 
         await update.message.reply_text(
             "Dùng:\n\n"
-
             "/addpending CHAT_ID SOTIEN"
         )
 
@@ -844,7 +815,7 @@ async def add_pending(
 
         conn.execute(
             text("""
-                INSERT INTO users (
+                INSERT INTO users_v3 (
                     chat_id,
                     username,
                     full_name,
@@ -865,17 +836,14 @@ async def add_pending(
                 ON CONFLICT(chat_id)
 
                 DO UPDATE SET
-
                     pending_balance =
-                        users.pending_balance
+                        users_v3.pending_balance
                         + :amount
             """),
 
             {
                 "chat_id": chat_id,
-
                 "amount": amount,
-
                 "created_ts": now,
             },
         )
@@ -893,19 +861,17 @@ async def add_pending(
 
             text=(
                 "⏳ HOA HỒNG CHỜ DUYỆT\n\n"
-
                 f"➕ +{amount:,}đ"
             ),
         )
 
     except Exception:
-
         pass
 
 
 # =========================================================
-# ADMIN DUYỆT HOA HỒNG
-# CHUYỂN CHỜ DUYỆT -> CÓ THỂ RÚT
+# ADMIN: DUYỆT HOA HỒNG
+# CHỜ DUYỆT -> CÓ THỂ RÚT
 # =========================================================
 
 async def approve_balance(
@@ -915,23 +881,21 @@ async def approve_balance(
 
     if (
         not ADMIN_CHAT_ID
-
-        or str(
-            update.effective_chat.id
-        )
-        != str(
-            ADMIN_CHAT_ID
-        )
+        or str(update.effective_chat.id)
+        != str(ADMIN_CHAT_ID)
     ):
+
+        await update.message.reply_text(
+            "⛔ Bạn không có quyền."
+        )
+
         return
 
     if len(context.args) != 2:
 
         await update.message.reply_text(
             "Dùng:\n\n"
-
-            "/approvebalance "
-            "CHAT_ID SOTIEN"
+            "/approvebalance CHAT_ID SOTIEN"
         )
 
         return
@@ -963,7 +927,7 @@ async def approve_balance(
             text("""
                 SELECT pending_balance
 
-                FROM users
+                FROM users_v3
 
                 WHERE chat_id = :chat_id
             """),
@@ -977,19 +941,17 @@ async def approve_balance(
         if not row:
 
             await update.message.reply_text(
-                "❌ Không tìm thấy user."
+                "❌ Không tìm thấy khách."
             )
 
             return
 
-        pending = int(
-            row[0]
-        )
+        pending = int(row[0])
 
         if amount > pending:
 
             await update.message.reply_text(
-                f"❌ User chỉ có "
+                f"❌ Khách chỉ có "
                 f"{pending:,}đ "
                 "đang chờ duyệt."
             )
@@ -998,10 +960,9 @@ async def approve_balance(
 
         conn.execute(
             text("""
-                UPDATE users
+                UPDATE users_v3
 
                 SET
-
                     pending_balance =
                         pending_balance
                         - :amount,
@@ -1010,12 +971,12 @@ async def approve_balance(
                         available_balance
                         + :amount
 
-                WHERE chat_id = :chat_id
+                WHERE
+                    chat_id = :chat_id
             """),
 
             {
                 "amount": amount,
-
                 "chat_id": chat_id,
             },
         )
@@ -1033,18 +994,19 @@ async def approve_balance(
             text=(
                 "✅ HOA HỒNG ĐÃ ĐƯỢC DUYỆT\n\n"
 
-                f"💰 +{amount:,}đ "
-                "vào số dư có thể rút."
+                f"💰 +{amount:,}đ\n"
+
+                "Số tiền đã chuyển sang "
+                "số dư có thể rút."
             ),
         )
 
     except Exception:
-
         pass
 
 
 # =========================================================
-# ADMIN CALLBACK
+# ADMIN CALLBACK BUTTONS
 # =========================================================
 
 async def admin_callback(
@@ -1054,17 +1016,10 @@ async def admin_callback(
 
     query = update.callback_query
 
-    await query.answer()
-
     if (
         not ADMIN_CHAT_ID
-
-        or str(
-            query.from_user.id
-        )
-        != str(
-            ADMIN_CHAT_ID
-        )
+        or str(query.from_user.id)
+        != str(ADMIN_CHAT_ID)
     ):
 
         await query.answer(
@@ -1074,22 +1029,19 @@ async def admin_callback(
 
         return
 
+    await query.answer()
+
     data = query.data
 
 
     # =====================================================
-    # TRẢ LINK
+    # ADMIN BẤM TRẢ LINK
     # =====================================================
 
-    if data.startswith(
-        "reply:"
-    ):
+    if data.startswith("reply:"):
 
         request_id = (
-            data.split(
-                ":",
-                1
-            )[1]
+            data.split(":", 1)[1]
         )
 
         with engine.begin() as conn:
@@ -1100,16 +1052,14 @@ async def admin_callback(
                         chat_id,
                         status
 
-                    FROM requests
+                    FROM requests_v3
 
                     WHERE
-                        request_id =
-                        :request_id
+                        request_id = :request_id
                 """),
 
                 {
-                    "request_id":
-                        request_id
+                    "request_id": request_id
                 },
 
             ).fetchone()
@@ -1117,51 +1067,43 @@ async def admin_callback(
             if not row:
 
                 await query.message.reply_text(
-                    "❌ Không tìm thấy "
-                    "yêu cầu."
+                    "❌ Không tìm thấy yêu cầu."
                 )
 
                 return
 
             customer_chat_id = row[0]
-
             status = row[1]
 
             if status == "done":
 
                 await query.message.reply_text(
-                    "✅ Yêu cầu này "
-                    "đã hoàn tất."
+                    "✅ Yêu cầu này đã hoàn tất."
                 )
 
                 return
 
             conn.execute(
                 text("""
-                    UPDATE requests
+                    UPDATE requests_v3
 
                     SET
                         status = 'processing',
-
                         updated_ts = :now
 
                     WHERE
-                        request_id =
-                        :request_id
+                        request_id = :request_id
                 """),
 
                 {
-                    "now":
-                        int(time.time()),
-
-                    "request_id":
-                        request_id,
+                    "now": int(time.time()),
+                    "request_id": request_id,
                 },
             )
 
             conn.execute(
                 text("""
-                    INSERT INTO admin_state (
+                    INSERT INTO admin_state_v3 (
                         admin_chat_id,
                         request_id
                     )
@@ -1171,21 +1113,16 @@ async def admin_callback(
                         :request_id
                     )
 
-                    ON CONFLICT(
-                        admin_chat_id
-                    )
+                    ON CONFLICT(admin_chat_id)
 
                     DO UPDATE SET
-
                         request_id =
                             excluded.request_id
                 """),
 
                 {
                     "admin_chat_id":
-                        int(
-                            ADMIN_CHAT_ID
-                        ),
+                        int(ADMIN_CHAT_ID),
 
                     "request_id":
                         request_id,
@@ -1193,49 +1130,44 @@ async def admin_callback(
             )
 
         await query.message.reply_text(
-            f"📤 Yêu cầu "
+            f"📤 Đang xử lý mã "
             f"{request_id}\n\n"
 
-            "👉 Bây giờ chỉ cần "
-            "dán link affiliate "
-            "vào bot."
+            "👉 Bây giờ bạn chỉ cần "
+            "dán LINK AFFILIATE vào bot.\n\n"
+
+            "Bot sẽ tự gửi link "
+            "đúng cho khách."
         )
 
         try:
 
             await context.bot.send_message(
-                chat_id=
-                    customer_chat_id,
+                chat_id=customer_chat_id,
 
                 text=(
                     "🔄 Yêu cầu của bạn "
                     "đang được xử lý.\n\n"
 
-                    "Bot sẽ gửi link "
+                    "Bot sẽ gửi link mua hàng "
                     "ngay khi hoàn tất."
                 ),
             )
 
         except Exception:
-
             pass
 
         return
 
 
     # =====================================================
-    # DUYỆT RÚT
+    # ADMIN DUYỆT RÚT TIỀN
     # =====================================================
 
-    if data.startswith(
-        "wdapprove:"
-    ):
+    if data.startswith("wdapprove:"):
 
         withdrawal_id = (
-            data.split(
-                ":",
-                1
-            )[1]
+            data.split(":", 1)[1]
         )
 
         with engine.begin() as conn:
@@ -1247,16 +1179,14 @@ async def admin_callback(
                         amount,
                         status
 
-                    FROM withdrawals
+                    FROM withdrawals_v3
 
                     WHERE
-                        withdrawal_id =
-                        :wid
+                        withdrawal_id = :wid
                 """),
 
                 {
-                    "wid":
-                        withdrawal_id
+                    "wid": withdrawal_id
                 },
 
             ).fetchone()
@@ -1265,48 +1195,48 @@ async def admin_callback(
                 return
 
             chat_id = row[0]
-
-            amount = row[1]
-
+            amount = int(row[1])
             status = row[2]
 
             if status != "pending":
 
                 await query.message.reply_text(
-                    "Yêu cầu này "
-                    "đã được xử lý."
+                    "Yêu cầu này đã được xử lý."
                 )
 
                 return
 
             conn.execute(
                 text("""
-                    UPDATE withdrawals
+                    UPDATE withdrawals_v3
 
-                    SET status =
-                        'approved'
+                    SET status = 'approved'
 
-                    WHERE withdrawal_id =
-                        :wid
+                    WHERE
+                        withdrawal_id = :wid
                 """),
 
                 {
-                    "wid":
-                        withdrawal_id
+                    "wid": withdrawal_id
                 },
             )
 
-        await context.bot.send_message(
-            chat_id=chat_id,
+        try:
 
-            text=(
-                "✅ YÊU CẦU RÚT TIỀN "
-                "ĐÃ ĐƯỢC DUYỆT\n\n"
+            await context.bot.send_message(
+                chat_id=chat_id,
 
-                f"💵 Số tiền: "
-                f"{amount:,}đ"
-            ),
-        )
+                text=(
+                    "✅ YÊU CẦU RÚT TIỀN "
+                    "ĐÃ ĐƯỢC DUYỆT\n\n"
+
+                    f"💵 Số tiền: "
+                    f"{amount:,}đ"
+                ),
+            )
+
+        except Exception:
+            pass
 
         await query.message.reply_text(
             f"✅ Đã duyệt rút "
@@ -1317,18 +1247,13 @@ async def admin_callback(
 
 
     # =====================================================
-    # TỪ CHỐI RÚT
+    # ADMIN TỪ CHỐI RÚT
     # =====================================================
 
-    if data.startswith(
-        "wdreject:"
-    ):
+    if data.startswith("wdreject:"):
 
         withdrawal_id = (
-            data.split(
-                ":",
-                1
-            )[1]
+            data.split(":", 1)[1]
         )
 
         with engine.begin() as conn:
@@ -1340,16 +1265,14 @@ async def admin_callback(
                         amount,
                         status
 
-                    FROM withdrawals
+                    FROM withdrawals_v3
 
                     WHERE
-                        withdrawal_id =
-                        :wid
+                        withdrawal_id = :wid
                 """),
 
                 {
-                    "wid":
-                        withdrawal_id
+                    "wid": withdrawal_id
                 },
 
             ).fetchone()
@@ -1358,42 +1281,36 @@ async def admin_callback(
                 return
 
             chat_id = row[0]
-
-            amount = row[1]
-
+            amount = int(row[1])
             status = row[2]
 
             if status != "pending":
 
                 await query.message.reply_text(
-                    "Yêu cầu này "
-                    "đã được xử lý."
+                    "Yêu cầu này đã được xử lý."
                 )
 
                 return
 
             conn.execute(
                 text("""
-                    UPDATE withdrawals
+                    UPDATE withdrawals_v3
 
-                    SET status =
-                        'rejected'
+                    SET status = 'rejected'
 
                     WHERE
-                        withdrawal_id =
-                        :wid
+                        withdrawal_id = :wid
                 """),
 
                 {
-                    "wid":
-                        withdrawal_id
+                    "wid": withdrawal_id
                 },
             )
 
-            # Hoàn số dư
+            # Hoàn lại tiền
             conn.execute(
                 text("""
-                    UPDATE users
+                    UPDATE users_v3
 
                     SET
                         available_balance =
@@ -1405,30 +1322,34 @@ async def admin_callback(
                 """),
 
                 {
-                    "amount":
-                        amount,
-
-                    "chat_id":
-                        chat_id,
+                    "amount": amount,
+                    "chat_id": chat_id,
                 },
             )
 
-        await context.bot.send_message(
-            chat_id=chat_id,
+        try:
 
-            text=(
-                "❌ Yêu cầu rút tiền "
-                "không được duyệt.\n\n"
+            await context.bot.send_message(
+                chat_id=chat_id,
 
-                f"💰 {amount:,}đ "
-                "đã được hoàn lại."
-            ),
-        )
+                text=(
+                    "❌ Yêu cầu rút tiền "
+                    "không được duyệt.\n\n"
+
+                    f"💰 {amount:,}đ "
+                    "đã được hoàn lại "
+                    "vào số dư có thể rút."
+                ),
+            )
+
+        except Exception:
+            pass
 
         await query.message.reply_text(
-            "❌ Đã từ chối "
-            "và hoàn số dư."
+            "❌ Đã từ chối và hoàn lại tiền."
         )
+
+        return
 
 
 # =========================================================
@@ -1445,14 +1366,9 @@ async def handle_admin_link(
         return False
 
     if (
-        str(
-            update.effective_chat.id
-        )
-        != str(
-            ADMIN_CHAT_ID
-        )
+        str(update.effective_chat.id)
+        != str(ADMIN_CHAT_ID)
     ):
-
         return False
 
     with engine.begin() as conn:
@@ -1461,140 +1377,127 @@ async def handle_admin_link(
             text("""
                 SELECT request_id
 
-                FROM admin_state
+                FROM admin_state_v3
 
                 WHERE
-                    admin_chat_id =
-                    :admin_chat_id
+                    admin_chat_id = :admin_chat_id
             """),
 
             {
                 "admin_chat_id":
-                    int(
-                        ADMIN_CHAT_ID
-                    )
+                    int(ADMIN_CHAT_ID)
             },
 
         ).fetchone()
 
         if not state:
-
             return False
 
-        request_id = (
-            state[0]
-        )
+        request_id = state[0]
 
         request = conn.execute(
             text("""
-                SELECT chat_id
+                SELECT
+                    chat_id,
+                    status
 
-                FROM requests
+                FROM requests_v3
 
                 WHERE
-                    request_id =
-                    :request_id
+                    request_id = :request_id
             """),
 
             {
-                "request_id":
-                    request_id
+                "request_id": request_id
             },
 
         ).fetchone()
 
         if not request:
-
             return False
 
-        customer_chat_id = (
-            request[0]
-        )
+        customer_chat_id = request[0]
 
         conn.execute(
             text("""
-                UPDATE requests
+                UPDATE requests_v3
 
                 SET
                     affiliate_url = :url,
-
                     status = 'done',
-
                     updated_ts = :now
 
                 WHERE
-                    request_id =
-                    :request_id
+                    request_id = :request_id
             """),
 
             {
                 "url": url,
-
-                "now":
-                    int(time.time()),
-
-                "request_id":
-                    request_id,
+                "now": int(time.time()),
+                "request_id": request_id,
             },
         )
 
         conn.execute(
             text("""
-                DELETE FROM admin_state
+                DELETE FROM admin_state_v3
 
                 WHERE
-                    admin_chat_id =
-                    :admin_chat_id
+                    admin_chat_id = :admin_chat_id
             """),
 
             {
                 "admin_chat_id":
-                    int(
-                        ADMIN_CHAT_ID
-                    )
+                    int(ADMIN_CHAT_ID)
             },
         )
 
-    await context.bot.send_message(
-        chat_id=customer_chat_id,
+    try:
 
-        text=(
-            "✅ LINK MUA HÀNG "
-            "ĐÃ SẴN SÀNG!\n\n"
+        await context.bot.send_message(
+            chat_id=customer_chat_id,
 
-            f"🛍 {url}\n\n"
+            text=(
+                "✅ LINK MUA HÀNG "
+                "ĐÃ SẴN SÀNG!\n\n"
 
-            "❤️ Cảm ơn bạn "
-            "đã sử dụng bot."
-        ),
+                f"🛍 {url}\n\n"
 
-        reply_markup=main_keyboard,
-    )
+                "❤️ Cảm ơn bạn "
+                "đã sử dụng bot."
+            ),
+
+            reply_markup=main_keyboard,
+        )
+
+    except Exception as e:
+
+        await update.message.reply_text(
+            f"❌ Gửi khách thất bại:\n"
+            f"{e}"
+        )
+
+        return True
 
     await update.message.reply_text(
-        "✅ Đã gửi link "
-        "cho khách."
+        "✅ Đã gửi link cho khách."
     )
 
     return True
 
 
 # =========================================================
-# BÁO CÁO CUỐI NGÀY
+# BÁO CÁO TRONG NGÀY
 # =========================================================
 
 async def send_daily_report(
-    app
+    context: ContextTypes.DEFAULT_TYPE
 ):
 
     if not ADMIN_CHAT_ID:
         return
 
-    tz = ZoneInfo(
-        "Asia/Ho_Chi_Minh"
-    )
-
-    now = datetime.now(tz)
+    now = datetime.now(TZ)
 
     start = datetime(
         now.year,
@@ -1603,7 +1506,7 @@ async def send_daily_report(
         0,
         0,
         0,
-        tzinfo=tz,
+        tzinfo=TZ,
     )
 
     end = (
@@ -1624,44 +1527,42 @@ async def send_daily_report(
         rows = conn.execute(
             text("""
                 SELECT
-                    request_id,
-                    chat_id,
-                    platform,
-                    original_url,
-                    affiliate_url,
-                    status,
-                    created_ts
+                    r.request_id,
+                    r.chat_id,
+                    r.platform,
+                    r.original_url,
+                    r.affiliate_url,
+                    r.status,
+                    r.created_ts,
+                    u.username,
+                    u.full_name
 
-                FROM requests
+                FROM requests_v3 r
+
+                LEFT JOIN users_v3 u
+                    ON r.chat_id = u.chat_id
 
                 WHERE
-                    created_ts >=
-                        :start_ts
+                    r.created_ts >= :start_ts
 
                 AND
-                    created_ts <
-                        :end_ts
+                    r.created_ts < :end_ts
 
                 ORDER BY
-                    created_ts ASC
+                    r.created_ts ASC
             """),
 
             {
-                "start_ts":
-                    start_ts,
-
-                "end_ts":
-                    end_ts,
+                "start_ts": start_ts,
+                "end_ts": end_ts,
             },
 
         ).fetchall()
 
     if not rows:
 
-        await app.bot.send_message(
-            chat_id=int(
-                ADMIN_CHAT_ID
-            ),
+        await context.bot.send_message(
+            chat_id=int(ADMIN_CHAT_ID),
 
             text=(
                 f"📊 BÁO CÁO NGÀY "
@@ -1675,15 +1576,9 @@ async def send_daily_report(
         return
 
     status_names = {
-
-        "pending":
-            "⏳ Chờ xử lý",
-
-        "processing":
-            "🔄 Đang xử lý",
-
-        "done":
-            "✅ Đã trả link",
+        "pending": "⏳ Chờ xử lý",
+        "processing": "🔄 Đang xử lý",
+        "done": "✅ Đã trả link",
     }
 
     total = len(rows)
@@ -1691,18 +1586,24 @@ async def send_daily_report(
     done_count = sum(
         1
         for row in rows
-
         if row[5] == "done"
     )
 
-    unfinished = (
-        total - done_count
+    processing_count = sum(
+        1
+        for row in rows
+        if row[5] == "processing"
+    )
+
+    pending_count = sum(
+        1
+        for row in rows
+        if row[5] == "pending"
     )
 
     parts = [
         f"📊 BÁO CÁO YÊU CẦU "
-        f"NGÀY "
-        f"{now.strftime('%d/%m/%Y')}\n"
+        f"NGÀY {now.strftime('%d/%m/%Y')}\n"
     ]
 
     for index, row in enumerate(
@@ -1711,31 +1612,37 @@ async def send_daily_report(
     ):
 
         request_id = row[0]
-
         chat_id = row[1]
-
         platform = row[2]
-
         original_url = row[3]
-
         affiliate_url = row[4]
-
         status = row[5]
-
         created_ts = row[6]
+        username = row[7]
+        full_name = row[8]
 
         created_time = (
             datetime
             .fromtimestamp(
                 created_ts,
-                tz
+                TZ
             )
-            .strftime(
-                "%H:%M"
-            )
+            .strftime("%H:%M")
         )
 
-        affiliate_text = (
+        user_text = (
+            f"@{username}"
+            if username
+            else "Không có username"
+        )
+
+        name_text = (
+            full_name
+            if full_name
+            else "Không có tên"
+        )
+
+        returned_link = (
             affiliate_url
             if affiliate_url
             else "Chưa có"
@@ -1751,16 +1658,23 @@ async def send_daily_report(
             f"👤 ID khách: "
             f"{chat_id}\n"
 
-            f"🏪 {platform}\n"
+            f"👤 Tên: "
+            f"{name_text}\n"
+
+            f"📱 User: "
+            f"{user_text}\n"
+
+            f"🏪 Nền tảng: "
+            f"{platform}\n"
 
             f"📅 Gửi lúc: "
             f"{created_time}\n"
 
-            f"🔗 Link gốc:\n"
+            f"🔗 Link khách gửi:\n"
             f"{original_url}\n"
 
             f"🔗 Link đã trả:\n"
-            f"{affiliate_text}\n"
+            f"{returned_link}\n"
 
             f"{status_names.get(status, status)}\n"
         )
@@ -1774,35 +1688,48 @@ async def send_daily_report(
         f"✅ Đã trả link: "
         f"{done_count}\n"
 
-        f"⏳ Chưa hoàn tất: "
-        f"{unfinished}"
+        f"🔄 Đang xử lý: "
+        f"{processing_count}\n"
+
+        f"⏳ Chờ xử lý: "
+        f"{pending_count}"
     )
 
     report = "".join(parts)
 
+    # Telegram giới hạn khoảng 4096 ký tự
+    # Chia thành nhiều tin nhỏ
     max_length = 3800
 
     while report:
 
-        chunk = report[
-            :max_length
-        ]
+        if len(report) <= max_length:
+            chunk = report
+            report = ""
 
-        report = report[
-            max_length:
-        ]
+        else:
+            cut = report.rfind(
+                "\n",
+                0,
+                max_length,
+            )
 
-        await app.bot.send_message(
-            chat_id=int(
-                ADMIN_CHAT_ID
-            ),
+            if cut <= 0:
+                cut = max_length
 
+            chunk = report[:cut]
+
+            report = report[cut:].lstrip()
+
+        await context.bot.send_message(
+            chat_id=int(ADMIN_CHAT_ID),
             text=chunk,
         )
 
 
 # =========================================================
-# /REPORT - ADMIN XEM NGAY
+# /REPORT
+# ADMIN XEM BÁO CÁO NGAY
 # =========================================================
 
 async def report_now(
@@ -1812,13 +1739,8 @@ async def report_now(
 
     if (
         not ADMIN_CHAT_ID
-
-        or str(
-            update.effective_chat.id
-        )
-        != str(
-            ADMIN_CHAT_ID
-        )
+        or str(update.effective_chat.id)
+        != str(ADMIN_CHAT_ID)
     ):
 
         await update.message.reply_text(
@@ -1828,12 +1750,12 @@ async def report_now(
         return
 
     await send_daily_report(
-        context.application
+        context
     )
 
 
 # =========================================================
-# HANDLE MESSAGE
+# XỬ LÝ TIN NHẮN
 # =========================================================
 
 async def handle_message(
@@ -1859,7 +1781,7 @@ async def handle_message(
 
 
     # =====================================================
-    # ADMIN ĐANG CHỜ DÁN LINK
+    # NẾU ADMIN ĐANG CHỜ DÁN AFFILIATE LINK
     # =====================================================
 
     if url:
@@ -1875,7 +1797,7 @@ async def handle_message(
 
 
     # =====================================================
-    # ĐANG RÚT TIỀN
+    # NẾU USER ĐANG TRONG QUY TRÌNH RÚT TIỀN
     # =====================================================
 
     withdraw_state = (
@@ -1887,32 +1809,23 @@ async def handle_message(
     if withdraw_state:
 
         stage = withdraw_state[0]
-
-        stored_amount = (
+        stored_amount = int(
             withdraw_state[1]
         )
 
 
         # =================================================
-        # NHẬP SỐ TIỀN
+        # BƯỚC NHẬP SỐ TIỀN
         # =================================================
 
         if stage == "amount":
 
             amount_text = (
                 message_text
-                .replace(
-                    ".",
-                    ""
-                )
-                .replace(
-                    ",",
-                    ""
-                )
-                .replace(
-                    "đ",
-                    ""
-                )
+                .replace(".", "")
+                .replace(",", "")
+                .replace("đ", "")
+                .replace("₫", "")
                 .strip()
             )
 
@@ -1926,7 +1839,7 @@ async def handle_message(
 
                 await update.message.reply_text(
                     "❌ Vui lòng nhập "
-                    "số tiền.\n\n"
+                    "số tiền bằng số.\n\n"
 
                     "Ví dụ:\n"
                     "50000"
@@ -1934,17 +1847,14 @@ async def handle_message(
 
                 return
 
-            available, pending = (
-                get_balances(
-                    chat_id
-                )
+            available, _ = get_balances(
+                chat_id
             )
 
             if amount <= 0:
 
                 await update.message.reply_text(
-                    "❌ Số tiền "
-                    "không hợp lệ."
+                    "❌ Số tiền không hợp lệ."
                 )
 
                 return
@@ -1963,30 +1873,24 @@ async def handle_message(
 
                 conn.execute(
                     text("""
-                        UPDATE withdraw_state
+                        UPDATE withdraw_state_v3
 
                         SET
                             stage = 'bank',
-
                             amount = :amount
 
                         WHERE
-                            chat_id =
-                            :chat_id
+                            chat_id = :chat_id
                     """),
 
                     {
-                        "amount":
-                            amount,
-
-                        "chat_id":
-                            chat_id,
+                        "amount": amount,
+                        "chat_id": chat_id,
                     },
                 )
 
             await update.message.reply_text(
-                "🏦 Nhập thông tin "
-                "nhận tiền.\n\n"
+                "🏦 Nhập thông tin nhận tiền.\n\n"
 
                 "Ví dụ:\n"
 
@@ -1999,18 +1903,14 @@ async def handle_message(
 
 
         # =================================================
-        # NHẬP TÀI KHOẢN
+        # BƯỚC NHẬP NGÂN HÀNG
         # =================================================
 
         if stage == "bank":
 
-            bank_info = (
-                message_text
-            )
+            bank_info = message_text
 
-            amount = int(
-                stored_amount
-            )
+            amount = stored_amount
 
             withdrawal_id = (
                 uuid.uuid4()
@@ -2025,38 +1925,51 @@ async def handle_message(
                             SELECT
                                 available_balance
 
-                            FROM users
+                            FROM users_v3
 
                             WHERE
-                                chat_id =
-                                :chat_id
+                                chat_id = :chat_id
                         """),
 
                         {
-                            "chat_id":
-                                chat_id
+                            "chat_id": chat_id
                         },
 
                     ).scalar()
                     or 0
                 )
 
+                available = int(
+                    available
+                )
+
                 if amount > available:
 
-                    clear_withdraw_state(
-                        chat_id
+                    conn.execute(
+                        text("""
+                            DELETE FROM withdraw_state_v3
+
+                            WHERE
+                                chat_id = :chat_id
+                        """),
+
+                        {
+                            "chat_id": chat_id
+                        },
                     )
 
                     await update.message.reply_text(
-                        "❌ Số dư "
+                        "❌ Số dư hiện tại "
                         "không còn đủ."
                     )
 
                     return
 
+                # Trừ tiền ngay khi tạo yêu cầu
+                # Nếu admin từ chối thì hoàn lại
                 conn.execute(
                     text("""
-                        UPDATE users
+                        UPDATE users_v3
 
                         SET
                             available_balance =
@@ -2064,22 +1977,18 @@ async def handle_message(
                                 - :amount
 
                         WHERE
-                            chat_id =
-                            :chat_id
+                            chat_id = :chat_id
                     """),
 
                     {
-                        "amount":
-                            amount,
-
-                        "chat_id":
-                            chat_id,
+                        "amount": amount,
+                        "chat_id": chat_id,
                     },
                 )
 
                 conn.execute(
                     text("""
-                        INSERT INTO withdrawals (
+                        INSERT INTO withdrawals_v3 (
                             withdrawal_id,
                             chat_id,
                             amount,
@@ -2099,37 +2008,25 @@ async def handle_message(
                     """),
 
                     {
-                        "wid":
-                            withdrawal_id,
-
-                        "chat_id":
-                            chat_id,
-
-                        "amount":
-                            amount,
-
-                        "bank_info":
-                            bank_info,
-
+                        "wid": withdrawal_id,
+                        "chat_id": chat_id,
+                        "amount": amount,
+                        "bank_info": bank_info,
                         "created_ts":
-                            int(
-                                time.time()
-                            ),
+                            int(time.time()),
                     },
                 )
 
                 conn.execute(
                     text("""
-                        DELETE FROM withdraw_state
+                        DELETE FROM withdraw_state_v3
 
                         WHERE
-                            chat_id =
-                            :chat_id
+                            chat_id = :chat_id
                     """),
 
                     {
-                        "chat_id":
-                            chat_id
+                        "chat_id": chat_id
                     },
                 )
 
@@ -2150,53 +2047,60 @@ async def handle_message(
 
             if ADMIN_CHAT_ID:
 
-                buttons = (
-                    InlineKeyboardMarkup(
-                        [[
-                            InlineKeyboardButton(
-                                "✅ Duyệt",
+                buttons = InlineKeyboardMarkup(
+                    [[
+                        InlineKeyboardButton(
+                            "✅ Duyệt",
 
-                                callback_data=(
-                                    "wdapprove:"
-                                    f"{withdrawal_id}"
-                                ),
+                            callback_data=(
+                                "wdapprove:"
+                                f"{withdrawal_id}"
                             ),
+                        ),
 
-                            InlineKeyboardButton(
-                                "❌ Từ chối",
+                        InlineKeyboardButton(
+                            "❌ Từ chối",
 
-                                callback_data=(
-                                    "wdreject:"
-                                    f"{withdrawal_id}"
-                                ),
+                            callback_data=(
+                                "wdreject:"
+                                f"{withdrawal_id}"
                             ),
-                        ]]
+                        ),
+                    ]]
+                )
+
+                try:
+
+                    await context.bot.send_message(
+                        chat_id=int(
+                            ADMIN_CHAT_ID
+                        ),
+
+                        text=(
+                            "💳 YÊU CẦU RÚT TIỀN\n\n"
+
+                            f"🆔 Mã: "
+                            f"{withdrawal_id}\n"
+
+                            f"👤 Chat ID: "
+                            f"{chat_id}\n"
+
+                            f"💵 Số tiền: "
+                            f"{amount:,}đ\n"
+
+                            f"🏦 Nhận tiền:\n"
+                            f"{bank_info}"
+                        ),
+
+                        reply_markup=buttons,
                     )
-                )
 
-                await context.bot.send_message(
-                    chat_id=int(
-                        ADMIN_CHAT_ID
-                    ),
+                except Exception as e:
 
-                    text=(
-                        "💳 YÊU CẦU RÚT TIỀN\n\n"
-
-                        f"🆔 "
-                        f"{withdrawal_id}\n"
-
-                        f"👤 Chat ID: "
-                        f"{chat_id}\n"
-
-                        f"💵 "
-                        f"{amount:,}đ\n"
-
-                        f"🏦 "
-                        f"{bank_info}"
-                    ),
-
-                    reply_markup=buttons,
-                )
+                    print(
+                        f"Lỗi gửi yêu cầu rút "
+                        f"cho admin: {e}"
+                    )
 
             return
 
@@ -2246,7 +2150,7 @@ async def handle_message(
     ):
 
         await update.message.reply_text(
-            "🛒 Hãy dán link "
+            "🛒 Hãy dán link sản phẩm "
             "Shopee vào đây.",
 
             reply_markup=main_keyboard,
@@ -2260,7 +2164,7 @@ async def handle_message(
     ):
 
         await update.message.reply_text(
-            "🎵 Hãy dán link "
+            "🎵 Hãy dán link sản phẩm "
             "TikTok vào đây.",
 
             reply_markup=main_keyboard,
@@ -2298,9 +2202,9 @@ async def handle_message(
     if not platform:
 
         await update.message.reply_text(
-            "❌ Link chưa được hỗ trợ.\n\n"
+            "❌ Link này chưa được hỗ trợ.\n\n"
 
-            "Hiện bot chỉ hỗ trợ "
+            "Hiện bot hỗ trợ "
             "Shopee và TikTok.",
 
             reply_markup=main_keyboard,
@@ -2310,7 +2214,7 @@ async def handle_message(
 
 
     # =====================================================
-    # CHỐNG LINK TRÙNG
+    # CHỐNG LINK TRÙNG TRONG 5 PHÚT
     # =====================================================
 
     duplicate = find_recent_duplicate(
@@ -2320,29 +2224,19 @@ async def handle_message(
 
     if duplicate:
 
-        request_id = (
-            duplicate[0]
-        )
-
-        status = (
-            duplicate[1]
-        )
-
-        affiliate_url = (
-            duplicate[2]
-        )
+        request_id = duplicate[0]
+        status = duplicate[1]
+        affiliate_url = duplicate[2]
 
         if (
             status == "done"
-
             and affiliate_url
         ):
 
             await update.message.reply_text(
-                "✅ Link này "
-                "vừa được xử lý.\n\n"
+                "✅ Link này vừa được xử lý.\n\n"
 
-                f"🛍 "
+                f"🛍 Link mua hàng:\n"
                 f"{affiliate_url}",
 
                 reply_markup=main_keyboard,
@@ -2357,7 +2251,7 @@ async def handle_message(
             f"🆔 Mã yêu cầu: "
             f"{request_id}\n\n"
 
-            "Vui lòng chờ bot xử lý.",
+            "Vui lòng chờ xử lý.",
 
             reply_markup=main_keyboard,
         )
@@ -2374,7 +2268,7 @@ async def handle_message(
         .hex[:8]
     )
 
-    now = int(
+    now_ts = int(
         time.time()
     )
 
@@ -2382,7 +2276,7 @@ async def handle_message(
 
         conn.execute(
             text("""
-                INSERT INTO requests (
+                INSERT INTO requests_v3 (
                     request_id,
                     chat_id,
                     platform,
@@ -2406,23 +2300,12 @@ async def handle_message(
             """),
 
             {
-                "request_id":
-                    request_id,
-
-                "chat_id":
-                    chat_id,
-
-                "platform":
-                    platform,
-
-                "url":
-                    url,
-
-                "created_ts":
-                    now,
-
-                "updated_ts":
-                    now,
+                "request_id": request_id,
+                "chat_id": chat_id,
+                "platform": platform,
+                "url": url,
+                "created_ts": now_ts,
+                "updated_ts": now_ts,
             },
         )
 
@@ -2441,7 +2324,7 @@ async def handle_message(
         "⏳ Trạng thái: "
         "Chờ xử lý.\n\n"
 
-        "Bot sẽ gửi link "
+        "Bot sẽ gửi lại link mua hàng "
         "sau khi hoàn tất.",
 
         reply_markup=main_keyboard,
@@ -2449,7 +2332,7 @@ async def handle_message(
 
 
     # =====================================================
-    # GỬI ADMIN
+    # GỬI YÊU CẦU CHO ADMIN
     # =====================================================
 
     if ADMIN_CHAT_ID:
@@ -2460,6 +2343,14 @@ async def handle_message(
             if user.username
 
             else "Không có username"
+        )
+
+        now_text = (
+            datetime
+            .now(TZ)
+            .strftime(
+                "%d/%m/%Y %H:%M"
+            )
         )
 
         buttons = InlineKeyboardMarkup(
@@ -2475,35 +2366,43 @@ async def handle_message(
             ]]
         )
 
-        await context.bot.send_message(
-            chat_id=int(
-                ADMIN_CHAT_ID
-            ),
+        try:
 
-            text=(
-                "🔔 YÊU CẦU MỚI\n\n"
+            await context.bot.send_message(
+                chat_id=int(
+                    ADMIN_CHAT_ID
+                ),
 
-                f"🏪 "
-                f"{platform}\n"
+                text=(
+                    "🔔 YÊU CẦU MỚI\n\n"
 
-                f"🆔 Mã: "
-                f"{request_id}\n"
+                    f"🏪 Nền tảng: "
+                    f"{platform}\n"
 
-                f"👤 User: "
-                f"{username}\n"
+                    f"🆔 Mã: "
+                    f"{request_id}\n"
 
-                f"💬 Chat ID: "
-                f"{chat_id}\n\n"
+                    f"👤 User: "
+                    f"{username}\n"
 
-                f"📅 Thời gian: "
-                f"{datetime.now(ZoneInfo('Asia/Ho_Chi_Minh')).strftime('%d/%m/%Y %H:%M')}\n\n"
+                    f"💬 ID khách: "
+                    f"{chat_id}\n"
 
-                f"🔗 Link khách gửi:\n"
-                f"{url}"
-            ),
+                    f"📅 Thời gian: "
+                    f"{now_text}\n\n"
 
-            reply_markup=buttons,
-        )
+                    f"🔗 Link khách gửi:\n"
+                    f"{url}"
+                ),
+
+                reply_markup=buttons,
+            )
+
+        except Exception as e:
+
+            print(
+                f"Lỗi gửi admin: {e}"
+            )
 
 
 # =========================================================
@@ -2521,7 +2420,8 @@ def main():
     if not BASE_URL:
 
         raise RuntimeError(
-            "Thiếu WEBHOOK BASE URL"
+            "Thiếu RENDER_EXTERNAL_URL "
+            "hoặc WEBHOOK_BASE_URL"
         )
 
     init_db()
@@ -2534,36 +2434,38 @@ def main():
 
 
     # =====================================================
-    # SCHEDULER
+    # JOB QUEUE
+    # 23:30 HÀNG NGÀY
     # =====================================================
 
-    scheduler = AsyncIOScheduler(
-        timezone="Asia/Ho_Chi_Minh"
-    )
-
-    scheduler.add_job(
-        send_daily_report,
-
-        trigger="cron",
-
+    report_time = dt_time(
         hour=23,
-
         minute=30,
-
-        args=[app],
+        tzinfo=TZ,
     )
 
-    scheduler.start()
+    app.job_queue.run_daily(
+        send_daily_report,
+        time=report_time,
+        name="daily_admin_report",
+    )
 
 
     # =====================================================
-    # COMMAND
+    # COMMAND HANDLERS
     # =====================================================
 
     app.add_handler(
         CommandHandler(
             "start",
             start,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "id",
+            get_id,
         )
     )
 
